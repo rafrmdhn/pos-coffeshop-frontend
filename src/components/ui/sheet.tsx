@@ -2,38 +2,38 @@
 
 import * as React from "react"
 import { XIcon } from "lucide-react"
-import { Dialog as SheetPrimitive } from "radix-ui"
+import * as DialogRadix from "@radix-ui/react-dialog"
 
 import { cn } from "@/lib/utils"
 
-function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />
+function Sheet({ ...props }: React.ComponentProps<typeof DialogRadix.Root>) {
+  return <DialogRadix.Root data-slot="sheet" {...props} />
 }
 
 function SheetTrigger({
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Trigger>) {
-  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />
+}: React.ComponentProps<typeof DialogRadix.Trigger>) {
+  return <DialogRadix.Trigger data-slot="sheet-trigger" {...props} />
 }
 
 function SheetClose({
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Close>) {
-  return <SheetPrimitive.Close data-slot="sheet-close" {...props} />
+}: React.ComponentProps<typeof DialogRadix.Close>) {
+  return <DialogRadix.Close data-slot="sheet-close" {...props} />
 }
 
 function SheetPortal({
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Portal>) {
-  return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
+}: React.ComponentProps<typeof DialogRadix.Portal>) {
+  return <DialogRadix.Portal data-slot="sheet-portal" {...props} />
 }
 
 function SheetOverlay({
   className,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+}: React.ComponentProps<typeof DialogRadix.Overlay>) {
   return (
-    <SheetPrimitive.Overlay
+    <DialogRadix.Overlay
       data-slot="sheet-overlay"
       className={cn(
         "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
@@ -50,14 +50,14 @@ function SheetContent({
   side = "right",
   showCloseButton = true,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content> & {
+}: React.ComponentProps<typeof DialogRadix.Content> & {
   side?: "top" | "right" | "bottom" | "left"
   showCloseButton?: boolean
 }) {
   return (
     <SheetPortal>
       <SheetOverlay />
-      <SheetPrimitive.Content
+      <DialogRadix.Content
         data-slot="sheet-content"
         className={cn(
           "fixed z-50 flex flex-col gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500",
@@ -75,12 +75,12 @@ function SheetContent({
       >
         {children}
         {showCloseButton && (
-          <SheetPrimitive.Close className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
+          <DialogRadix.Close className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
             <XIcon className="size-4" />
             <span className="sr-only">Close</span>
-          </SheetPrimitive.Close>
+          </DialogRadix.Close>
         )}
-      </SheetPrimitive.Content>
+      </DialogRadix.Content>
     </SheetPortal>
   )
 }
@@ -108,9 +108,9 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
 function SheetTitle({
   className,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Title>) {
+}: React.ComponentProps<typeof DialogRadix.Title>) {
   return (
-    <SheetPrimitive.Title
+    <DialogRadix.Title
       data-slot="sheet-title"
       className={cn("font-semibold text-foreground", className)}
       {...props}
@@ -121,9 +121,9 @@ function SheetTitle({
 function SheetDescription({
   className,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Description>) {
+}: React.ComponentProps<typeof DialogRadix.Description>) {
   return (
-    <SheetPrimitive.Description
+    <DialogRadix.Description
       data-slot="sheet-description"
       className={cn("text-sm text-muted-foreground", className)}
       {...props}
