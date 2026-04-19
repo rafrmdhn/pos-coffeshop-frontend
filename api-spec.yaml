@@ -1,0 +1,4490 @@
+openapi: 3.1.0
+info:
+  title: POS Multi-Outlet Coffee Shop API
+  description: |
+    REST API untuk Sistem Point of Sale (POS) Multi-Outlet Coffee Shop.
+
+    ## Authentication
+    API menggunakan **Laravel Sanctum** bearer token authentication.
+    - **Owner & Manager**: Login via email + password → mendapat bearer token.
+    - **Cashier**: Login via PIN 4-6 digit → mendapat bearer token (memerlukan sesi outlet aktif).
+    - Token dikirim melalui header `Authorization: Bearer {token}`.
+
+    ## Data Isolation
+    Semua data di-scope per `outlet_id` secara otomatis via Laravel Global Scope.
+    Manager dan Cashier hanya melihat outlet mereka.
+    Untuk endpoint operasional, Owner wajib memilih `current_outlet` terlebih dahulu.
+    Jika `current_outlet` belum dipilih, API mengembalikan validation error 422 pada field `outlet_id`.
+    Untuk operasi berbasis outlet (contoh: transaksi, shift, expense), Owner menggunakan
+    `current_outlet` (konteks outlet aktif) yang dapat diatur via endpoint context auth.
+
+    ## UUID
+    Semua resource menggunakan UUID v7 sebagai primary key.
+    Pada endpoint transaksi, UUID dapat di-generate di client-side (untuk offline support).
+
+    ## Pagination
+    Endpoint list menggunakan cursor-based atau offset pagination dengan format standar Laravel.
+  version: 1.0.0
+  contact:
+    name: Developer Team
+
+servers:
+  - url: https://api.kopinusantara.id
+    description: Production Server
+  - url: http://localhost:8000
+    description: Local Development
+
+tags:
+  - name: Auth
+    description: Autentikasi & manajemen sesi
+  - name: Outlets
+    description: Manajemen cabang/outlet (Owner only)
+  - name: Users
+    description: Manajemen pengguna & role
+  - name: Categories
+    description: Manajemen kategori produk
+  - name: Products
+    description: Manajemen produk/menu
+  - name: Recipes
+    description: Manajemen resep/BOM (Bill of Materials)
+  - name: Inventory
+    description: Manajemen bahan baku & stok
+  - name: Transactions
+    description: Transaksi penjualan & POS
+  - name: Shifts
+    description: Manajemen shift kasir & blind drop
+  - name: Expenses
+    description: Pencatatan pengeluaran operasional (OPEX)
+  - name: Vouchers
+    description: Manajemen voucher diskon
+  - name: Roles & Permissions
+    description: Manajemen role & permission dinamis (Owner only)
+  - name: Audit Logs
+    description: Rekam jejak aktivitas krusial pengguna
+  - name: Reports
+    description: Laporan & dashboard analytics
+
+# ============================================================
+# SECURITY SCHEMES
+# ============================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum Token
+      description: |
+        Token didapat dari endpoint `POST /api/auth/login` atau `POST /api/auth/pin`.
+        Kirim token via header: `Authorization: Bearer {token}`
+
+  # ==========================================================
+  # REUSABLE PARAMETERS
+  # ==========================================================
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: UUID resource
+      schema:
+        type: string
+        format: uuid
+        example: "01912345-abcd-7def-8901-234567890abc"
+
+    QueryPage:
+      name: page
+      in: query
+      required: false
+      description: Nomor halaman (pagination)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    QueryPerPage:
+      name: per_page
+      in: query
+      required: false
+      description: Jumlah item per halaman
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 15
+
+    QuerySearch:
+      name: search
+      in: query
+      required: false
+      description: Kata kunci pencarian
+      schema:
+        type: string
+
+    QuerySortBy:
+      name: sort_by
+      in: query
+      required: false
+      description: Kolom untuk sorting
+      schema:
+        type: string
+
+    QuerySortDir:
+      name: sort_dir
+      in: query
+      required: false
+      description: Arah sorting
+      schema:
+        type: string
+        enum: [ asc, desc ]
+        default: desc
+
+    QueryDateFrom:
+      name: date_from
+      in: query
+      required: false
+      description: Filter tanggal awal (YYYY-MM-DD)
+      schema:
+        type: string
+        format: date
+
+    QueryDateTo:
+      name: date_to
+      in: query
+      required: false
+      description: Filter tanggal akhir (YYYY-MM-DD)
+      schema:
+        type: string
+        format: date
+
+  # ==========================================================
+  # REUSABLE SCHEMAS
+  # ==========================================================
+  schemas:
+    # ----------------------------------------------------------
+    # Common
+    # ----------------------------------------------------------
+    PaginationMeta:
+      type: object
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        last_page:
+          type: integer
+          example: 5
+        per_page:
+          type: integer
+          example: 15
+        total:
+          type: integer
+          example: 73
+        from:
+          type: integer
+          example: 1
+        to:
+          type: integer
+          example: 15
+
+    PaginationLinks:
+      type: object
+      properties:
+        first:
+          type: string
+          example: "https://api.kopinusantara.id/api/products?page=1"
+        last:
+          type: string
+          example: "https://api.kopinusantara.id/api/products?page=5"
+        prev:
+          type: [ string, "null" ]
+          example: null
+        next:
+          type: [ string, "null" ]
+          example: "https://api.kopinusantara.id/api/products?page=2"
+
+    ErrorResponse:
+      type: object
+      required: [ success, message ]
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "The given data was invalid."
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            email: [ "The email field is required." ]
+
+    UnauthenticatedResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Unauthenticated."
+
+    ForbiddenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "You do not have the required permission."
+
+    NotFoundResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Resource not found."
+
+    Timestamps:
+      type: object
+      properties:
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-12T07:30:00.000000Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-04-12T07:30:00.000000Z"
+
+    # ----------------------------------------------------------
+    # Auth
+    # ----------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [ email, password ]
+      properties:
+        email:
+          type: string
+          format: email
+          example: "budi.manager@kopinusantara.id"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "password"
+        device_name:
+          type: string
+          description: Identifier device untuk token naming
+          example: "tablet-outlet-kemang"
+
+    PinLoginRequest:
+      type: object
+      required: [ pin, outlet_id ]
+      properties:
+        pin:
+          type: string
+          minLength: 4
+          maxLength: 6
+          pattern: "^[0-9]{4,6}$"
+          example: "1234"
+        outlet_id:
+          type: string
+          format: uuid
+          description: ID outlet yang sedang aktif di tablet
+          example: "01912345-abcd-7def-8901-234567890abc"
+
+    SetActiveOutletContextRequest:
+      type: object
+      required: [ outlet_id ]
+      properties:
+        outlet_id:
+          type: string
+          format: uuid
+          description: Outlet aktif yang dipilih Owner untuk konteks operasional.
+          example: "01912345-abcd-7def-8901-234567890abc"
+
+    SetActiveOutletContextResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Outlet aktif berhasil diperbarui."
+        data:
+          type: object
+          properties:
+            current_outlet:
+              anyOf:
+                - $ref: "#/components/schemas/OutletSimple"
+                - type: "null"
+
+    AuthUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Budi Santoso"
+        email:
+          type: string
+          format: email
+          example: "budi.manager@kopinusantara.id"
+        phone:
+          type: [ string, "null" ]
+          example: "08123456789"
+        avatar_url:
+          type: [ string, "null" ]
+        is_active:
+          type: boolean
+          example: true
+        outlet:
+          anyOf:
+            - $ref: "#/components/schemas/OutletSimple"
+            - type: "null"
+        current_outlet:
+          anyOf:
+            - $ref: "#/components/schemas/OutletSimple"
+            - type: "null"
+          description: |
+            Outlet aktif untuk konteks operasional Owner.
+            Untuk Manager/Cashier umumnya bernilai null.
+        roles:
+          type: array
+          items:
+            type: string
+          example: [ "manager" ]
+        permissions:
+          type: array
+          items:
+            type: string
+          example:
+            - "view-products"
+            - "manage-products"
+            - "create-transaction"
+            - "open-close-shift"
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Login berhasil."
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              example: "1|aBcDeFgHiJkLmNoPqRsTuVwXyZ123456789"
+            token_type:
+              type: string
+              example: "Bearer"
+            expires_at:
+              type: string
+              format: date-time
+              example: "2026-04-13T07:30:00.000000Z"
+            user:
+              $ref: "#/components/schemas/AuthUser"
+
+    # ----------------------------------------------------------
+    # Outlet
+    # ----------------------------------------------------------
+    OutletSimple:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Kopi Nusantara - Kemang"
+        slug:
+          type: string
+          example: "kopi-nusantara-kemang"
+
+    Outlet:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Kopi Nusantara - Kemang"
+        slug:
+          type: string
+          example: "kopi-nusantara-kemang"
+        address:
+          type: [ string, "null" ]
+          example: "Jl. Kemang Raya No. 10, Jakarta Selatan"
+        phone:
+          type: [ string, "null" ]
+          example: "021-55501234"
+        tax_id:
+          type: [ string, "null" ]
+        timezone:
+          type: string
+          example: "Asia/Jakarta"
+        receipt_header:
+          type: [ string, "null" ]
+        receipt_footer:
+          type: [ string, "null" ]
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreOutletRequest:
+      type: object
+      required: [ name ]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: "Kopi Nusantara - Kemang"
+        address:
+          type: [ string, "null" ]
+          example: "Jl. Kemang Raya No. 10"
+        phone:
+          type: [ string, "null" ]
+          maxLength: 20
+          example: "021-55501234"
+        tax_id:
+          type: [ string, "null" ]
+          maxLength: 50
+        timezone:
+          type: string
+          default: "Asia/Jakarta"
+        receipt_header:
+          type: [ string, "null" ]
+        receipt_footer:
+          type: [ string, "null" ]
+        is_active:
+          type: boolean
+          default: true
+
+    # ----------------------------------------------------------
+    # User
+    # ----------------------------------------------------------
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: [ string, "null" ]
+          format: uuid
+        outlet:
+          $ref: "#/components/schemas/OutletSimple"
+        name:
+          type: string
+          example: "Sari Dewi"
+        email:
+          type: string
+          format: email
+        phone:
+          type: [ string, "null" ]
+        avatar_url:
+          type: [ string, "null" ]
+        is_active:
+          type: boolean
+        roles:
+          type: array
+          items:
+            type: string
+          example: [ "cashier" ]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreUserRequest:
+      type: object
+      required: [ name, email, password, role ]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: "Sari Dewi"
+        email:
+          type: string
+          format: email
+          maxLength: 150
+          example: "sari@kopinusantara.id"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "securepassword"
+        password_confirmation:
+          type: string
+          format: password
+          example: "securepassword"
+        phone:
+          type: [ string, "null" ]
+          maxLength: 20
+        outlet_id:
+          type: [ string, "null" ]
+          format: uuid
+          description: Wajib untuk Manager/Cashier. NULL untuk Owner.
+        role:
+          type: string
+          enum: [ owner, manager, cashier ]
+          example: "cashier"
+        pin:
+          type: string
+          minLength: 4
+          maxLength: 6
+          pattern: "^[0-9]{4,6}$"
+          description: Wajib untuk role Cashier
+          example: "1234"
+        is_active:
+          type: boolean
+          default: true
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: [ string, "null" ]
+        outlet_id:
+          type: [ string, "null" ]
+          format: uuid
+        role:
+          type: string
+          enum: [ owner, manager, cashier ]
+        pin:
+          type: [ string, "null" ]
+          minLength: 4
+          maxLength: 6
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Isi jika ingin mengubah password
+        password_confirmation:
+          type: string
+          format: password
+        is_active:
+          type: boolean
+
+    # ----------------------------------------------------------
+    # Category
+    # ----------------------------------------------------------
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Espresso Based"
+        slug:
+          type: string
+          example: "espresso-based"
+        description:
+          type: [ string, "null" ]
+        sort_order:
+          type: integer
+          example: 1
+        is_active:
+          type: boolean
+          example: true
+        products_count:
+          type: integer
+          description: Jumlah produk dalam kategori (when loaded)
+          example: 9
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreCategoryRequest:
+      type: object
+      required: [ name ]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+          example: "Espresso Based"
+        description:
+          type: [ string, "null" ]
+          maxLength: 255
+        sort_order:
+          type: integer
+          default: 0
+        is_active:
+          type: boolean
+          default: true
+
+    # ----------------------------------------------------------
+    # Product
+    # ----------------------------------------------------------
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: string
+          format: uuid
+        category_id:
+          type: string
+          format: uuid
+        category:
+          $ref: "#/components/schemas/Category"
+        name:
+          type: string
+          example: "Caramel Latte"
+        slug:
+          type: string
+          example: "caramel-latte"
+        description:
+          type: [ string, "null" ]
+        image_url:
+          type: [ string, "null" ]
+        price:
+          type: number
+          format: double
+          example: 32000.00
+        sku:
+          type: [ string, "null" ]
+          example: "ESP-CRL-001"
+        is_active:
+          type: boolean
+          example: true
+        track_stock:
+          type: boolean
+          example: true
+        sort_order:
+          type: integer
+          example: 5
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreProductRequest:
+      type: object
+      required: [ category_id, name, price ]
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 100
+          example: "Caramel Latte"
+        description:
+          type: [ string, "null" ]
+        image:
+          type: string
+          format: binary
+          description: File gambar produk (jpg, png, webp; max 2MB)
+        price:
+          type: number
+          format: double
+          minimum: 0
+          example: 32000
+        sku:
+          type: [ string, "null" ]
+          maxLength: 50
+        is_active:
+          type: boolean
+          default: true
+        track_stock:
+          type: boolean
+          default: true
+        sort_order:
+          type: integer
+          default: 0
+
+    # ----------------------------------------------------------
+    # Recipe (BOM)
+    # ----------------------------------------------------------
+    RecipeItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        raw_material_id:
+          type: string
+          format: uuid
+        raw_material:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Biji Kopi Arabica"
+            unit:
+              type: string
+              example: "gram"
+            cost_per_unit:
+              type: number
+              format: double
+              example: 0.35
+        quantity_needed:
+          type: number
+          format: double
+          example: 18.000
+        estimated_cost:
+          type: number
+          format: double
+          description: "cost_per_unit × quantity_needed"
+          example: 6.30
+
+    UpdateRecipeRequest:
+      type: object
+      required: [ ingredients ]
+      properties:
+        ingredients:
+          type: array
+          description: Array lengkap bahan baku. Menggantikan semua recipe sebelumnya
+            (sync strategy).
+          items:
+            type: object
+            required: [ raw_material_id, quantity_needed ]
+            properties:
+              raw_material_id:
+                type: string
+                format: uuid
+              quantity_needed:
+                type: number
+                format: double
+                minimum: 0.001
+                example: 18.000
+
+    # ----------------------------------------------------------
+    # Inventory (Raw Materials)
+    # ----------------------------------------------------------
+    RawMaterial:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Biji Kopi Arabica"
+        unit:
+          type: string
+          example: "gram"
+        current_stock:
+          type: number
+          format: double
+          example: 5000.000
+        min_stock:
+          type: number
+          format: double
+          example: 1000.000
+        cost_per_unit:
+          type: number
+          format: double
+          example: 0.35
+        is_low_stock:
+          type: boolean
+          description: "true jika current_stock <= min_stock"
+          example: false
+        last_restock_at:
+          type: [ string, "null" ]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreRawMaterialRequest:
+      type: object
+      required: [ name, unit, cost_per_unit ]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: "Biji Kopi Arabica"
+        unit:
+          type: string
+          maxLength: 20
+          enum: [ gram, ml, pcs, kg, liter ]
+          example: "gram"
+        current_stock:
+          type: number
+          format: double
+          minimum: 0
+          default: 0
+        min_stock:
+          type: number
+          format: double
+          minimum: 0
+          default: 0
+        cost_per_unit:
+          type: number
+          format: double
+          minimum: 0
+          example: 0.35
+
+    UpdateRawMaterialRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        unit:
+          type: string
+          enum: [ gram, ml, pcs, kg, liter ]
+        current_stock:
+          type: number
+          format: double
+          minimum: 0
+        min_stock:
+          type: number
+          format: double
+          minimum: 0
+        cost_per_unit:
+          type: number
+          format: double
+          minimum: 0
+
+    # ----------------------------------------------------------
+    # Transaction
+    # ----------------------------------------------------------
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: string
+          format: uuid
+        shift_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        voucher_id:
+          type: [ string, "null" ]
+          format: uuid
+        transaction_number:
+          type: string
+          example: "TRX-20260412-0001"
+        order_type:
+          type: string
+          enum: [ dine_in, takeaway ]
+          example: "dine_in"
+        subtotal:
+          type: number
+          format: double
+          example: 60000.00
+        discount_amount:
+          type: number
+          format: double
+          example: 5000.00
+        tax_rate:
+          type: number
+          format: double
+          example: 10.00
+        tax_amount:
+          type: number
+          format: double
+          example: 5500.00
+        grand_total:
+          type: number
+          format: double
+          example: 60500.00
+        status:
+          type: string
+          enum: [ completed, voided ]
+          example: "completed"
+        source:
+          type: string
+          enum: [ online, offline ]
+          example: "online"
+        notes:
+          type: [ string, "null" ]
+        voided_by:
+          type: [ string, "null" ]
+          format: uuid
+        void_reason:
+          type: [ string, "null" ]
+        voided_at:
+          type: [ string, "null" ]
+          format: date-time
+        transaction_date:
+          type: string
+          format: date-time
+        synced_at:
+          type: [ string, "null" ]
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionItem"
+        payments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionPayment"
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Sari Dewi"
+        voucher:
+          type: [ object, "null" ]
+          properties:
+            id:
+              type: string
+              format: uuid
+            code:
+              type: string
+              example: "GRAND10"
+            name:
+              type: string
+              example: "Grand Opening 10%"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TransactionItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        product_name:
+          type: string
+          example: "Caramel Latte"
+        product_price:
+          type: number
+          format: double
+          example: 32000.00
+        quantity:
+          type: integer
+          example: 2
+        notes:
+          type: [ string, "null" ]
+          example: "Less sugar"
+        subtotal:
+          type: number
+          format: double
+          example: 64000.00
+
+    TransactionPayment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        payment_method:
+          type: string
+          enum: [ cash, qris ]
+          example: "cash"
+        amount:
+          type: number
+          format: double
+          example: 60500.00
+        cash_received:
+          type: [ number, "null" ]
+          format: double
+          example: 100000.00
+        cash_change:
+          type: [ number, "null" ]
+          format: double
+          example: 39500.00
+        reference_number:
+          type: [ string, "null" ]
+
+    StoreTransactionRequest:
+      type: object
+      required: [ order_type, items, payments ]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Client-generated UUID (untuk offline support). Opsional; server
+            akan generate jika kosong.
+        order_type:
+          type: string
+          enum: [ dine_in, takeaway ]
+          example: "dine_in"
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [ product_id, quantity ]
+            properties:
+              product_id:
+                type: string
+                format: uuid
+              quantity:
+                type: integer
+                minimum: 1
+                example: 2
+              notes:
+                type: [ string, "null" ]
+                maxLength: 255
+                example: "Less sugar"
+        payments:
+          type: array
+          minItems: 1
+          description: Mendukung split payment (multiple entries)
+          items:
+            type: object
+            required: [ payment_method, amount ]
+            properties:
+              payment_method:
+                type: string
+                enum: [ cash, qris ]
+                example: "cash"
+              amount:
+                type: number
+                format: double
+                minimum: 0
+                example: 60500.00
+              cash_received:
+                type: [ number, "null" ]
+                format: double
+                description: Wajib untuk metode cash
+                example: 100000.00
+              reference_number:
+                type: [ string, "null" ]
+                description: Nomor referensi QRIS (opsional)
+        voucher_code:
+          type: [ string, "null" ]
+          description: Kode voucher yang diaplikasikan
+          example: "GRAND10"
+        notes:
+          type: [ string, "null" ]
+          example: "Meja 5"
+        transaction_date:
+          type: string
+          format: date-time
+          description: Waktu transaksi aktual (diperlukan saat offline sync; default now)
+        source:
+          type: string
+          enum: [ online, offline ]
+          default: "online"
+          description: Asal transaksi
+
+    SyncTransactionsRequest:
+      type: object
+      required: [ transactions ]
+      properties:
+        transactions:
+          type: array
+          description: Batch transaksi offline yang perlu disinkronisasi
+          items:
+            allOf:
+              - $ref: "#/components/schemas/StoreTransactionRequest"
+              - type: object
+                required: [ id, transaction_date, source ]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    description: UUID yang di-generate di client saat offline
+                  source:
+                    type: string
+                    enum: [ offline ]
+                    example: "offline"
+
+    SyncTransactionsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Sinkronisasi selesai. 5 berhasil, 0 gagal."
+        data:
+          type: object
+          properties:
+            total:
+              type: integer
+              example: 5
+            synced:
+              type: integer
+              example: 5
+            failed:
+              type: integer
+              example: 0
+            results:
+              type: array
+              items:
+                type: object
+                properties:
+                  client_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [ synced, duplicate, failed ]
+                  transaction_number:
+                    type: [ string, "null" ]
+                    example: "TRX-20260412-0003"
+                  error:
+                    type: [ string, "null" ]
+
+    VoidTransactionRequest:
+      type: object
+      required: [ reason ]
+      properties:
+        reason:
+          type: string
+          minLength: 5
+          maxLength: 500
+          example: "Pesanan salah, pelanggan membatalkan"
+
+    # ----------------------------------------------------------
+    # Shift
+    # ----------------------------------------------------------
+    Shift:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: string
+          format: uuid
+        opened_by:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Budi Santoso"
+        closed_by:
+          type: [ object, "null" ]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Budi Santoso"
+        opening_cash:
+          type: number
+          format: double
+          example: 500000.00
+        expected_cash:
+          type: number
+          format: double
+          example: 1250000.00
+        actual_cash:
+          type: [ number, "null" ]
+          format: double
+          example: 1245000.00
+        cash_difference:
+          type: [ number, "null" ]
+          format: double
+          example: -5000
+        total_transactions:
+          type: integer
+          example: 42
+        total_revenue:
+          type: number
+          format: double
+          example: 1850000.00
+        total_cash_sales:
+          type: number
+          format: double
+          example: 1200000.00
+        total_qris_sales:
+          type: number
+          format: double
+          example: 650000.00
+        status:
+          type: string
+          enum: [ open, closed ]
+          example: "open"
+        opened_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: [ string, "null" ]
+          format: date-time
+        notes:
+          type: [ string, "null" ]
+        shift_counts:
+          type: array
+          description: Detail blind drop (hanya saat closed)
+          items:
+            $ref: "#/components/schemas/ShiftCount"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ShiftCount:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        denomination:
+          type: integer
+          example: 50000
+        qty:
+          type: integer
+          example: 10
+        subtotal:
+          type: number
+          format: double
+          example: 500000.00
+
+    OpenShiftRequest:
+      type: object
+      required: [ opening_cash ]
+      properties:
+        opening_cash:
+          type: number
+          format: double
+          minimum: 0
+          example: 500000.00
+        notes:
+          type: [ string, "null" ]
+
+    CloseShiftRequest:
+      type: object
+      required: [ counts ]
+      properties:
+        counts:
+          type: array
+          description: Perhitungan uang fisik per denominasi (blind drop)
+          items:
+            type: object
+            required: [ denomination, qty ]
+            properties:
+              denomination:
+                type: integer
+                enum: [ 100000, 50000, 20000, 10000, 5000, 2000, 1000, 500, 200, 100 ]
+                example: 50000
+              qty:
+                type: integer
+                minimum: 0
+                example: 10
+        notes:
+          type: [ string, "null" ]
+          example: "Uang Rp 5.000 kurang 1 lembar"
+
+    # ----------------------------------------------------------
+    # Expense
+    # ----------------------------------------------------------
+    Expense:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: string
+          format: uuid
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Budi Santoso"
+        category:
+          type: string
+          enum: [ salary, rent, utilities, supplies, maintenance, marketing, other ]
+          example: "utilities"
+        description:
+          type: string
+          example: "Listrik bulan April 2026"
+        amount:
+          type: number
+          format: double
+          example: 2500000.00
+        expense_date:
+          type: string
+          format: date
+          example: "2026-04-01"
+        reference_number:
+          type: [ string, "null" ]
+          example: "PLN-04/2026"
+        notes:
+          type: [ string, "null" ]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreExpenseRequest:
+      type: object
+      required: [ category, description, amount, expense_date ]
+      properties:
+        category:
+          type: string
+          enum: [ salary, rent, utilities, supplies, maintenance, marketing, other ]
+          example: "utilities"
+        description:
+          type: string
+          maxLength: 255
+          example: "Listrik bulan April 2026"
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+          example: 2500000
+        expense_date:
+          type: string
+          format: date
+          example: "2026-04-01"
+        reference_number:
+          type: [ string, "null" ]
+          maxLength: 50
+        notes:
+          type: [ string, "null" ]
+
+    # ----------------------------------------------------------
+    # Voucher
+    # ----------------------------------------------------------
+    Voucher:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: [ string, "null" ]
+          format: uuid
+        code:
+          type: string
+          example: "GRAND10"
+        name:
+          type: string
+          example: "Grand Opening 10%"
+        discount_type:
+          type: string
+          enum: [ percentage, fixed ]
+          example: "percentage"
+        discount_value:
+          type: number
+          format: double
+          example: 10.00
+        min_purchase:
+          type: number
+          format: double
+          example: 50000.00
+        max_discount:
+          type: [ number, "null" ]
+          format: double
+          example: 30000.00
+        usage_limit:
+          type: [ integer, "null" ]
+          example: 100
+        usage_count:
+          type: integer
+          example: 23
+        valid_from:
+          type: string
+          format: date
+          example: "2026-04-01"
+        valid_until:
+          type: string
+          format: date
+          example: "2026-04-30"
+        is_active:
+          type: boolean
+          example: true
+        is_valid:
+          type: boolean
+          description: "Computed: is_active AND within date range AND usage < limit"
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoreVoucherRequest:
+      type: object
+      required: [ code, name, discount_type, discount_value, valid_from, valid_until ]
+      properties:
+        code:
+          type: string
+          maxLength: 30
+          example: "GRAND10"
+        name:
+          type: string
+          maxLength: 100
+          example: "Grand Opening 10%"
+        discount_type:
+          type: string
+          enum: [ percentage, fixed ]
+        discount_value:
+          type: number
+          format: double
+          minimum: 0.01
+          example: 10
+        min_purchase:
+          type: number
+          format: double
+          minimum: 0
+          default: 0
+        max_discount:
+          type: [ number, "null" ]
+          format: double
+          description: Hanya relevan untuk discount_type=percentage
+        usage_limit:
+          type: [ integer, "null" ]
+          minimum: 1
+        valid_from:
+          type: string
+          format: date
+        valid_until:
+          type: string
+          format: date
+        outlet_id:
+          type: [ string, "null" ]
+          format: uuid
+          description: NULL = berlaku untuk semua outlet
+        is_active:
+          type: boolean
+          default: true
+
+    ValidateVoucherRequest:
+      type: object
+      required: [ code, subtotal ]
+      properties:
+        code:
+          type: string
+          example: "GRAND10"
+        subtotal:
+          type: number
+          format: double
+          description: Subtotal transaksi untuk validasi min_purchase
+          example: 60000
+
+    ValidateVoucherResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            voucher:
+              $ref: "#/components/schemas/Voucher"
+            discount_amount:
+              type: number
+              format: double
+              description: Nominal diskon yang akan diberikan berdasarkan subtotal
+              example: 6000.00
+            message:
+              type: string
+              example: "Voucher valid. Diskon Rp 6.000 akan diberikan."
+
+    # ----------------------------------------------------------
+    # Role & Permission
+    # ----------------------------------------------------------
+    Role:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "manager"
+        guard_name:
+          type: string
+          example: "web"
+        permissions:
+          type: array
+          items:
+            type: string
+          example:
+            - "view-products"
+            - "manage-products"
+            - "create-transaction"
+        users_count:
+          type: integer
+          description: Jumlah user yang memiliki role ini
+          example: 3
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Permission:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "manage-products"
+        guard_name:
+          type: string
+          example: "web"
+        description:
+          type: [ string, "null" ]
+          example: "Kelola data produk (create, update, delete)"
+
+    StoreRoleRequest:
+      type: object
+      required: [ name, permissions ]
+      properties:
+        name:
+          type: string
+          maxLength: 125
+          example: "supervisor"
+          description: Nama role unik (lowercase, tanpa spasi)
+        permissions:
+          type: array
+          minItems: 1
+          description: Array nama permission yang di-assign ke role
+          items:
+            type: string
+          example:
+            - "view-products"
+            - "manage-products"
+            - "view-transactions"
+            - "view-outlet-reports"
+
+    UpdateRoleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 125
+        permissions:
+          type: array
+          minItems: 1
+          items:
+            type: string
+
+    # ----------------------------------------------------------
+    # Audit Log
+    # ----------------------------------------------------------
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user:
+          type: [ object, "null" ]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Budi Santoso"
+            email:
+              type: string
+              example: "budi.manager@kopinusantara.id"
+        outlet:
+          type: [ object, "null" ]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              example: "Kopi Nusantara - Kemang"
+        action:
+          type: string
+          enum: [ created, updated, deleted, voided, login, logout ]
+          example: "voided"
+        auditable_type:
+          type: string
+          description: Nama model yang diubah (short class name)
+          example: "Transaction"
+        auditable_id:
+          type: string
+          format: uuid
+          example: "01912345-abcd-7def-8901-234567890abc"
+        old_values:
+          type: [ object, "null" ]
+          description: Nilai sebelum perubahan
+          example:
+            status: "completed"
+        new_values:
+          type: [ object, "null" ]
+          description: Nilai setelah perubahan
+          example:
+            status: "voided"
+            voided_by: "01912345-xxxx-7def-8901-234567890abc"
+            void_reason: "Pesanan salah"
+        ip_address:
+          type: [ string, "null" ]
+          example: "192.168.1.100"
+        user_agent:
+          type: [ string, "null" ]
+          example: "Mozilla/5.0 (Linux; Android 12) Chrome/120"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-12T10:30:00.000000Z"
+
+    # ----------------------------------------------------------
+    # Reports
+    # ----------------------------------------------------------
+    DashboardReport:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from:
+              type: string
+              format: date
+              example: "2026-04-01"
+            to:
+              type: string
+              format: date
+              example: "2026-04-12"
+        summary:
+          type: object
+          properties:
+            total_revenue:
+              type: number
+              format: double
+              description: Total omzet (grand_total dari transaksi completed)
+              example: 15800000.00
+            total_hpp:
+              type: number
+              format: double
+              description: Total Harga Pokok Penjualan
+              example: 4200000.00
+            total_opex:
+              type: number
+              format: double
+              description: Total pengeluaran operasional
+              example: 8500000.00
+            net_profit:
+              type: number
+              format: double
+              description: "Laba bersih: revenue - hpp - opex"
+              example: 3100000.00
+            total_transactions:
+              type: integer
+              example: 523
+            average_transaction:
+              type: number
+              format: double
+              description: Rata-rata nilai transaksi
+              example: 30210.00
+            total_voided:
+              type: integer
+              example: 3
+        revenue_by_day:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              revenue:
+                type: number
+                format: double
+              transactions:
+                type: integer
+        revenue_by_payment_method:
+          type: object
+          properties:
+            cash:
+              type: number
+              format: double
+              example: 9800000.00
+            qris:
+              type: number
+              format: double
+              example: 6000000.00
+        top_products:
+          type: array
+          items:
+            type: object
+            properties:
+              product_id:
+                type: string
+                format: uuid
+              product_name:
+                type: string
+                example: "Caffe Latte"
+              total_qty:
+                type: integer
+                example: 87
+              total_revenue:
+                type: number
+                format: double
+                example: 2436000.00
+        expense_by_category:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+                example: "salary"
+              total:
+                type: number
+                format: double
+                example: 5000000.00
+
+    SalesReport:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from:
+              type: string
+              format: date
+            to:
+              type: string
+              format: date
+        transactions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              transaction_number:
+                type: string
+              transaction_date:
+                type: string
+                format: date-time
+              order_type:
+                type: string
+                enum: [ dine_in, takeaway ]
+              grand_total:
+                type: number
+                format: double
+              status:
+                type: string
+                enum: [ completed, voided ]
+              cashier:
+                type: string
+              payment_method:
+                type: string
+        summary:
+          type: object
+          properties:
+            total_revenue:
+              type: number
+              format: double
+            total_transactions:
+              type: integer
+            dine_in_count:
+              type: integer
+            takeaway_count:
+              type: integer
+            voided_count:
+              type: integer
+            hourly_distribution:
+              type: array
+              items:
+                type: object
+                properties:
+                  hour:
+                    type: integer
+                    example: 9
+                  transactions:
+                    type: integer
+                    example: 12
+                  revenue:
+                    type: number
+                    format: double
+
+    InventoryReport:
+      type: object
+      properties:
+        materials:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+                example: "Biji Kopi Arabica"
+              unit:
+                type: string
+                example: "gram"
+              current_stock:
+                type: number
+                format: double
+              min_stock:
+                type: number
+                format: double
+              cost_per_unit:
+                type: number
+                format: double
+              total_value:
+                type: number
+                format: double
+                description: "current_stock × cost_per_unit"
+              is_low_stock:
+                type: boolean
+              total_consumed:
+                type: number
+                format: double
+                description: Total konsumsi dalam periode
+        summary:
+          type: object
+          properties:
+            total_materials:
+              type: integer
+            low_stock_count:
+              type: integer
+            total_stock_value:
+              type: number
+              format: double
+              description: Total nilai inventori
+
+  # ==========================================================
+  # REUSABLE RESPONSES
+  # ==========================================================
+  responses:
+    "401":
+      description: Unauthenticated
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UnauthenticatedResponse"
+    "403":
+      description: Forbidden — permission tidak mencukupi
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ForbiddenResponse"
+    "404":
+      description: Resource tidak ditemukan
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/NotFoundResponse"
+    "422":
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+# ============================================================
+# PATHS
+# ============================================================
+paths:
+  # ============================================================
+  # AUTH
+  # ============================================================
+  /api/auth/login:
+    post:
+      tags: [ Auth ]
+      summary: Login dengan email & password
+      description: |
+        Login untuk Owner dan Manager. Mengembalikan bearer token, data user,
+        outlet kerja, current outlet context (jika ada), dan daftar permissions.
+
+        **Rate limit:** 5 percobaan per menit per IP.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Kredensial salah
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Email atau password salah."
+        "422":
+          $ref: "#/components/responses/422"
+        "429":
+          description: Terlalu banyak percobaan login
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Terlalu banyak percobaan login. Silakan coba lagi dalam 60 detik."
+
+  /api/auth/pin:
+    post:
+      tags: [ Auth ]
+      summary: Login cepat dengan PIN (Cashier)
+      description: |
+        Fast PIN login untuk kasir. Memerlukan `outlet_id` aktif (sesi tablet sudah dibuka oleh Manager).
+        PIN di-hash dengan bcrypt di server.
+
+        **Rate limit:** 10 percobaan per menit per IP.
+      operationId: pinLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinLoginRequest"
+      responses:
+        "200":
+          description: PIN login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: PIN salah atau user tidak ditemukan di outlet tersebut
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "PIN tidak valid."
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/auth/logout:
+    post:
+      tags: [ Auth ]
+      summary: Logout & revoke token
+      description: Menghapus bearer token yang sedang aktif.
+      operationId: logout
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Logout berhasil
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Logout berhasil."
+        "401":
+          $ref: "#/components/responses/401"
+
+  /api/auth/me:
+    get:
+      tags: [ Auth ]
+      summary: Data user yang sedang login
+      description: Mengembalikan data user, outlet, current outlet context, roles, dan
+        permissions dari token yang aktif.
+      operationId: me
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Data user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/AuthUser"
+        "401":
+          $ref: "#/components/responses/401"
+
+  /api/auth/context/outlet:
+    post:
+      tags: [ Auth ]
+      summary: Set outlet context aktif (Owner)
+      description: |
+        Menetapkan `current_outlet` untuk owner. Konteks ini digunakan pada endpoint
+        berbasis outlet ketika owner tidak memiliki `outlet_id` tetap.
+
+        **Permission:** `view-all-outlets` (Owner only)
+      operationId: setActiveOutletContext
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetActiveOutletContextRequest"
+      responses:
+        "200":
+          description: Outlet context aktif berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetActiveOutletContextResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  # ============================================================
+  # OUTLETS
+  # ============================================================
+  /api/outlets:
+    get:
+      tags: [ Outlets ]
+      summary: Daftar semua outlet
+      description: |
+        Menampilkan daftar semua outlet.
+
+        **Permission:** `view-all-outlets` (Owner only)
+      operationId: listOutlets
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - name: is_active
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Daftar outlet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Outlet"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+    post:
+      tags: [ Outlets ]
+      summary: Tambah outlet baru
+      description: |
+        Membuat outlet/cabang baru.
+
+        **Permission:** `manage-outlets` (Owner only)
+      operationId: createOutlet
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreOutletRequest"
+      responses:
+        "201":
+          description: Outlet berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Outlet berhasil dibuat."
+                  data:
+                    $ref: "#/components/schemas/Outlet"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/outlets/{id}:
+    put:
+      tags: [ Outlets ]
+      summary: Update outlet
+      description: |
+        Memperbarui data outlet.
+
+        **Permission:** `manage-outlets` (Owner only)
+      operationId: updateOutlet
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreOutletRequest"
+      responses:
+        "200":
+          description: Outlet berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Outlet berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/Outlet"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+  # ============================================================
+  # USERS
+  # ============================================================
+  /api/users:
+    get:
+      tags: [ Users ]
+      summary: Daftar pengguna
+      description: |
+        Menampilkan daftar pengguna. Manager hanya melihat user di outletnya; Owner melihat semua.
+
+        **Permission:** `manage-users` (Owner) — Manager bisa view terbatas di outletnya.
+      operationId: listUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ owner, manager, cashier ]
+        - name: outlet_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: is_active
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Daftar pengguna
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+    post:
+      tags: [ Users ]
+      summary: Tambah pengguna baru
+      description: |
+        Membuat user baru dan assign role.
+
+        **Permission:** `manage-users` (Owner only)
+      operationId: createUser
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreUserRequest"
+      responses:
+        "201":
+          description: User berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Pengguna berhasil dibuat."
+                  data:
+                    $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/users/{id}:
+    put:
+      tags: [ Users ]
+      summary: Update pengguna
+      description: |
+        Memperbarui data pengguna. Hanya field yang dikirim yang akan diupdate.
+
+        **Permission:** `manage-users` (Owner only)
+      operationId: updateUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: User berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Pengguna berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Users ]
+      summary: Hapus pengguna (soft delete)
+      description: |
+        Soft-delete pengguna. User tidak dihapus permanen karena menjaga integritas data transaksi.
+
+        **Permission:** `manage-users` (Owner only)
+      operationId: deleteUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: User berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Pengguna berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+
+  # ============================================================
+  # CATEGORIES
+  # ============================================================
+  /api/categories:
+    get:
+      tags: [ Categories ]
+      summary: Daftar kategori
+      description: |
+        Menampilkan daftar kategori produk. Data auto-scoped per outlet.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `view-products`
+      operationId: listCategories
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: is_active
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: with_count
+          in: query
+          required: false
+          description: Sertakan products_count
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Daftar kategori
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Category"
+        "401":
+          $ref: "#/components/responses/401"
+        "422":
+          $ref: "#/components/responses/422"
+
+    post:
+      tags: [ Categories ]
+      summary: Tambah kategori baru
+      description: |
+        **Permission:** `manage-categories`
+      operationId: createCategory
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreCategoryRequest"
+      responses:
+        "201":
+          description: Kategori berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Kategori berhasil dibuat."
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/categories/{id}:
+    put:
+      tags: [ Categories ]
+      summary: Update kategori
+      description: |
+        **Permission:** `manage-categories`
+      operationId: updateCategory
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreCategoryRequest"
+      responses:
+        "200":
+          description: Kategori berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Kategori berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Categories ]
+      summary: Hapus kategori
+      description: |
+        Menghapus kategori. Gagal jika masih ada produk aktif di kategori ini.
+
+        **Permission:** `manage-categories`
+      operationId: deleteCategory
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Kategori berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Kategori berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: Kategori masih memiliki produk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Kategori tidak bisa dihapus karena masih memiliki 5 produk."
+
+  # ============================================================
+  # PRODUCTS
+  # ============================================================
+  /api/products:
+    get:
+      tags: [ Products ]
+      summary: Daftar produk
+      description: |
+        Menampilkan daftar produk/menu. Data auto-scoped per outlet.  
+        Untuk POS, filter `is_active=true` dan urutkan berdasarkan `sort_order`.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `view-products`
+      operationId: listProducts
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - name: category_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: is_active
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/QuerySortBy"
+        - $ref: "#/components/parameters/QuerySortDir"
+      responses:
+        "200":
+          description: Daftar produk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "422":
+          $ref: "#/components/responses/422"
+
+    post:
+      tags: [ Products ]
+      summary: Tambah produk baru
+      description: |
+        Membuat produk baru. Gambar produk dikirim sebagai multipart form-data.
+
+        **Permission:** `manage-products`
+      operationId: createProduct
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/StoreProductRequest"
+      responses:
+        "201":
+          description: Produk berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Produk berhasil dibuat."
+                  data:
+                    $ref: "#/components/schemas/Product"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/products/{id}:
+    put:
+      tags: [ Products ]
+      summary: Update produk
+      description: |
+        Memperbarui data produk. Perubahan harga akan dicatat di audit log.
+
+        **Permission:** `manage-products`  
+        **Catatan:** Harga di transaksi existing tidak terpengaruh (snapshot).
+      operationId: updateProduct
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/StoreProductRequest"
+      responses:
+        "200":
+          description: Produk berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Produk berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/Product"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Products ]
+      summary: Hapus produk (soft delete)
+      description: |
+        Soft-delete produk. Produk tidak tampil di POS tapi tetap ada di DB untuk laporan historis.
+
+        **Permission:** `manage-products`
+      operationId: deleteProduct
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Produk berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Produk berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+
+  # ============================================================
+  # RECIPES (BOM)
+  # ============================================================
+  /api/products/{id}/recipes:
+    get:
+      tags: [ Recipes ]
+      summary: Lihat resep produk (BOM)
+      description: |
+        Menampilkan daftar bahan baku dan jumlah yang dibutuhkan untuk 1 porsi produk, beserta estimasi HPP.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `manage-recipes`
+      operationId: getProductRecipes
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Resep produk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      product:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                          name:
+                            type: string
+                            example: "Caramel Latte"
+                          price:
+                            type: number
+                            format: double
+                            example: 32000.00
+                      ingredients:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/RecipeItem"
+                      total_hpp:
+                        type: number
+                        format: double
+                        description: Total estimasi HPP (cost) per porsi
+                        example: 13.30
+                      margin:
+                        type: number
+                        format: double
+                        description: "Margin: price - total_hpp"
+                        example: 31986.70
+                      margin_percentage:
+                        type: number
+                        format: double
+                        description: "Margin %: (margin / price) × 100"
+                        example: 99.96
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    put:
+      tags: [ Recipes ]
+      summary: Update/set resep produk (BOM)
+      description: |
+        Mengganti seluruh resep produk dengan daftar bahan baru (sync strategy).
+        Kirim semua bahan yang dibutuhkan; yang tidak ada di request akan dihapus.
+
+        **Permission:** `manage-recipes`
+      operationId: updateProductRecipes
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRecipeRequest"
+      responses:
+        "200":
+          description: Resep berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Resep produk berhasil diperbarui."
+                  data:
+                    type: object
+                    properties:
+                      ingredients:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/RecipeItem"
+                      total_hpp:
+                        type: number
+                        format: double
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+  # ============================================================
+  # INVENTORY
+  # ============================================================
+  /api/inventory:
+    get:
+      tags: [ Inventory ]
+      summary: Daftar bahan baku & stok
+      description: |
+        Menampilkan seluruh bahan baku dan stok saat ini. Auto-scoped per outlet.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `view-inventory`
+      operationId: listInventory
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - name: low_stock
+          in: query
+          required: false
+          description: "Filter hanya stok rendah (current_stock <= min_stock)"
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/QuerySortBy"
+        - $ref: "#/components/parameters/QuerySortDir"
+      responses:
+        "200":
+          description: Daftar bahan baku
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RawMaterial"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+    post:
+      tags: [ Inventory ]
+      summary: Tambah bahan baku baru
+      description: |
+        **Permission:** `manage-inventory`
+      operationId: createRawMaterial
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreRawMaterialRequest"
+      responses:
+        "201":
+          description: Bahan baku berhasil ditambahkan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Bahan baku berhasil ditambahkan."
+                  data:
+                    $ref: "#/components/schemas/RawMaterial"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/inventory/{id}:
+    put:
+      tags: [ Inventory ]
+      summary: Update bahan baku / restok
+      description: |
+        Memperbarui data atau jumlah stok bahan baku.  
+        Untuk restok, kirim nilai `current_stock` yang baru (absolut, bukan delta).
+
+        **Permission:** `manage-inventory`
+      operationId: updateRawMaterial
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRawMaterialRequest"
+      responses:
+        "200":
+          description: Bahan baku berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Bahan baku berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/RawMaterial"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Inventory ]
+      summary: Hapus bahan baku (soft delete)
+      description: |
+        Soft-delete bahan baku. Gagal jika masih digunakan sebagai resep produk aktif.
+
+        **Permission:** `manage-inventory`
+      operationId: deleteRawMaterial
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Bahan baku berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Bahan baku berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: Bahan baku masih digunakan di resep
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Bahan baku tidak bisa dihapus karena masih digunakan oleh 3 resep
+                      produk."
+
+  # ============================================================
+  # TRANSACTIONS
+  # ============================================================
+  /api/transactions:
+    get:
+      tags: [ Transactions ]
+      summary: Daftar transaksi
+      description: |
+        Menampilkan riwayat transaksi. Auto-scoped per outlet.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `view-transactions`
+      operationId: listTransactions
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ completed, voided ]
+        - name: order_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ dine_in, takeaway ]
+        - name: shift_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Filter berdasarkan kasir
+        - $ref: "#/components/parameters/QuerySortBy"
+        - $ref: "#/components/parameters/QuerySortDir"
+      responses:
+        "200":
+          description: Daftar transaksi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "422":
+          $ref: "#/components/responses/422"
+
+    post:
+      tags: [ Transactions ]
+      summary: Buat transaksi baru
+      description: |
+        Membuat transaksi penjualan baru. Memerlukan shift aktif (status `open`).
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+        Jika belum dipilih, API mengembalikan validation error 422 pada field `outlet_id`.
+
+        **Proses:**
+        1. Validasi produk & stok.
+        2. Snapshot harga produk ke `transaction_items`.
+        3. Hitung subtotal, diskon (jika voucher), pajak PB1 10%, grand total.
+        4. Simpan payment details.
+        5. Dispatch `DeductStockJob` (async via queue).
+        6. Update voucher `usage_count` jika digunakan.
+
+        **Permission:** `create-transaction`  
+        **Middleware:** `ensure.shift.open`
+      operationId: createTransaction
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreTransactionRequest"
+      responses:
+        "201":
+          description: Transaksi berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Transaksi berhasil."
+                  data:
+                    $ref: "#/components/schemas/Transaction"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "409":
+          description: Shift belum dibuka
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Tidak ada shift aktif. Buka shift terlebih dahulu."
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/transactions/sync:
+    post:
+      tags: [ Transactions ]
+      summary: Sinkronisasi transaksi offline (batch)
+      description: |
+        Endpoint untuk menyinkronisasi batch transaksi yang dibuat saat offline.
+        Setiap transaksi harus memiliki `id` (UUID yang di-generate di client) dan `transaction_date`.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+        Jika belum dipilih, API mengembalikan validation error 422 pada field `outlet_id`.
+
+        **Idempotent:** Jika `id` sudah ada di database, transaksi akan di-skip (status `duplicate`).
+
+        **Permission:** `create-transaction`
+      operationId: syncTransactions
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncTransactionsRequest"
+      responses:
+        "200":
+          description: Hasil sinkronisasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncTransactionsResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/transactions/{id}:
+    get:
+      tags: [ Transactions ]
+      summary: Detail transaksi
+      description: |
+        Menampilkan detail lengkap transaksi beserta items dan payments.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `view-transactions`
+      operationId: getTransaction
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Detail transaksi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Transaction"
+        "401":
+          $ref: "#/components/responses/401"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/transactions/{id}/void:
+    post:
+      tags: [ Transactions ]
+      summary: Void transaksi
+      description: |
+        Membatalkan (void) transaksi. Status berubah menjadi `voided`.
+        Stok bahan baku **tidak** dikembalikan otomatis (harus dilakukan manual via inventory).
+
+        **Permission:** `approve-void` (Owner/Manager only)
+      operationId: voidTransaction
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VoidTransactionRequest"
+      responses:
+        "200":
+          description: Transaksi berhasil di-void
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Transaksi berhasil di-void."
+                  data:
+                    $ref: "#/components/schemas/Transaction"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: Transaksi sudah di-void sebelumnya
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Transaksi ini sudah di-void sebelumnya."
+        "422":
+          $ref: "#/components/responses/422"
+
+  # ============================================================
+  # SHIFTS
+  # ============================================================
+  /api/shifts:
+    get:
+      tags: [ Shifts ]
+      summary: Daftar shift
+      description: |
+        Menampilkan riwayat shift. Auto-scoped per outlet.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `open-close-shift`
+      operationId: listShifts
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ open, closed ]
+        - $ref: "#/components/parameters/QuerySortBy"
+        - $ref: "#/components/parameters/QuerySortDir"
+      responses:
+        "200":
+          description: Daftar shift
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Shift"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/shifts/{id}:
+    get:
+      tags: [ Shifts ]
+      summary: Detail shift
+      description: |
+        Menampilkan detail shift beserta summary transaksi dan data blind drop.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `open-close-shift`
+      operationId: getShift
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Detail shift
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Shift"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/shifts/open:
+    post:
+      tags: [ Shifts ]
+      summary: Buka shift baru
+      description: |
+        Membuka shift baru untuk outlet. Hanya boleh 1 shift aktif per outlet.
+        Gagal jika sudah ada shift berstatus `open`.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+        Jika belum dipilih, API mengembalikan validation error 422 pada field `outlet_id`.
+
+        **Permission:** `open-close-shift` (Manager only)
+      operationId: openShift
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenShiftRequest"
+      responses:
+        "201":
+          description: Shift berhasil dibuka
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Shift berhasil dibuka."
+                  data:
+                    $ref: "#/components/schemas/Shift"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "409":
+          description: Masih ada shift aktif
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Masih ada shift aktif. Tutup shift terlebih dahulu."
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/shifts/close:
+    post:
+      tags: [ Shifts ]
+      summary: Tutup shift (blind drop)
+      description: |
+        Menutup shift aktif. Kasir wajib menghitung uang fisik per denominasi (blind drop).
+        Sistem akan menghitung `expected_cash`, membandingkan dengan `actual_cash`, dan mencatat selisih.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+        Jika belum dipilih, API mengembalikan validation error 422 pada field `outlet_id`.
+
+        **Perhitungan:**
+        - `expected_cash = opening_cash + total_cash_sales`
+        - `actual_cash = SUM(denomination × qty)`
+        - `cash_difference = actual_cash - expected_cash`
+
+        **Permission:** `open-close-shift` (Manager only)  
+        **Note:** Cashier bisa submit blind drop via `submit-blind-drop` permission.
+      operationId: closeShift
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloseShiftRequest"
+      responses:
+        "200":
+          description: Shift berhasil ditutup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Shift berhasil ditutup."
+                  data:
+                    $ref: "#/components/schemas/Shift"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "409":
+          description: Tidak ada shift aktif
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Tidak ada shift aktif untuk ditutup."
+        "422":
+          $ref: "#/components/responses/422"
+
+  # ============================================================
+  # EXPENSES
+  # ============================================================
+  /api/expenses:
+    get:
+      tags: [ Expenses ]
+      summary: Daftar pengeluaran
+      description: |
+        Menampilkan daftar pengeluaran operasional. Auto-scoped per outlet.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `view-expenses`
+      operationId: listExpenses
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ salary, rent, utilities, supplies, maintenance, marketing, other ]
+        - $ref: "#/components/parameters/QuerySortBy"
+        - $ref: "#/components/parameters/QuerySortDir"
+      responses:
+        "200":
+          description: Daftar pengeluaran
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Expense"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+    post:
+      tags: [ Expenses ]
+      summary: Catat pengeluaran baru
+      description: |
+        Mencatat pengeluaran operasional baru.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+        Jika belum dipilih, API akan mengembalikan validation error 422 pada field `outlet_id`.
+
+        **Permission:** `manage-expenses`
+      operationId: createExpense
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreExpenseRequest"
+      responses:
+        "201":
+          description: Pengeluaran berhasil dicatat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Pengeluaran berhasil dicatat."
+                  data:
+                    $ref: "#/components/schemas/Expense"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/expenses/{id}:
+    put:
+      tags: [ Expenses ]
+      summary: Update pengeluaran
+      description: |
+        **Permission:** `manage-expenses`
+      operationId: updateExpense
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreExpenseRequest"
+      responses:
+        "200":
+          description: Pengeluaran berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Pengeluaran berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/Expense"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Expenses ]
+      summary: Hapus pengeluaran
+      description: |
+        **Permission:** `manage-expenses`
+      operationId: deleteExpense
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Pengeluaran berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Pengeluaran berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+
+  # ============================================================
+  # VOUCHERS
+  # ============================================================
+  /api/vouchers:
+    get:
+      tags: [ Vouchers ]
+      summary: Daftar voucher
+      description: |
+        Menampilkan daftar voucher. Auto-scoped per outlet (+ voucher global outlet_id=null).
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+
+        **Permission:** `manage-vouchers` (full list) atau `apply-voucher` (hanya active & valid)
+      operationId: listVouchers
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QuerySearch"
+        - name: is_active
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: discount_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ percentage, fixed ]
+      responses:
+        "200":
+          description: Daftar voucher
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Voucher"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "422":
+          $ref: "#/components/responses/422"
+
+    post:
+      tags: [ Vouchers ]
+      summary: Buat voucher baru
+      description: |
+        **Permission:** `manage-vouchers`
+      operationId: createVoucher
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreVoucherRequest"
+      responses:
+        "201":
+          description: Voucher berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Voucher berhasil dibuat."
+                  data:
+                    $ref: "#/components/schemas/Voucher"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/vouchers/validate:
+    post:
+      tags: [ Vouchers ]
+      summary: Validasi kode voucher
+      description: |
+        Memeriksa apakah kode voucher valid dan menghitung diskon yang akan diberikan berdasarkan subtotal.
+
+        Untuk Owner, endpoint ini membutuhkan `current_outlet` aktif.
+        Jika belum dipilih, API mengembalikan validation error 422 pada field `outlet_id`.
+
+        **Validasi:**
+        1. Kode ada dan `is_active = true`
+        2. Tanggal hari ini dalam range `valid_from` — `valid_until`
+        3. `usage_count < usage_limit`
+        4. `subtotal >= min_purchase`
+        5. Voucher berlaku untuk outlet ini (atau global)
+
+        **Permission:** `apply-voucher`
+      operationId: validateVoucher
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateVoucherRequest"
+      responses:
+        "200":
+          description: Voucher valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateVoucherResponse"
+        "404":
+          description: Kode voucher tidak ditemukan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Kode voucher tidak ditemukan."
+        "422":
+          description: Voucher tidak valid (expired, usage limit, min purchase)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Voucher sudah tidak berlaku atau minimum pembelian belum tercapai."
+
+  /api/vouchers/{id}:
+    put:
+      tags: [ Vouchers ]
+      summary: Update voucher
+      description: |
+        **Permission:** `manage-vouchers`
+      operationId: updateVoucher
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreVoucherRequest"
+      responses:
+        "200":
+          description: Voucher berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Voucher berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/Voucher"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Vouchers ]
+      summary: Hapus voucher (soft delete)
+      description: |
+        **Permission:** `manage-vouchers`
+      operationId: deleteVoucher
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Voucher berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Voucher berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+
+  # ============================================================
+  # REPORTS
+  # ============================================================
+  /api/reports/dashboard:
+    get:
+      tags: [ Reports ]
+      summary: Dashboard analytics
+      description: |
+        Menampilkan ringkasan bisnis: Revenue, HPP, OPEX, Laba Bersih, top produk, distribusi pembayaran.
+
+        **Owner:** Bisa melihat semua outlet atau per outlet (via query param).
+        **Manager:** Hanya outlet miliknya.
+
+        **Permission:** `view-outlet-reports` atau `view-global-reports`
+      operationId: dashboardReport
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - name: outlet_id
+          in: query
+          required: false
+          description: Filter outlet tertentu (Owner only). Kosong = agregasi semua outlet.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Dashboard report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/DashboardReport"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+  /api/reports/sales:
+    get:
+      tags: [ Reports ]
+      summary: Laporan penjualan detail
+      description: |
+        Menampilkan data penjualan detail per transaksi beserta summary statistik.
+
+        **Permission:** `view-outlet-reports` atau `view-global-reports`
+      operationId: salesReport
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - name: outlet_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: order_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ dine_in, takeaway ]
+        - name: payment_method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ cash, qris ]
+      responses:
+        "200":
+          description: Laporan penjualan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/SalesReport"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+  /api/reports/inventory:
+    get:
+      tags: [ Reports ]
+      summary: Laporan inventori & stok
+      description: |
+        Menampilkan ringkasan stok bahan baku, total konsumsi dalam periode, dan nilai inventori.
+
+        **Permission:** `view-outlet-reports` atau `view-global-reports`
+      operationId: inventoryReport
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - name: outlet_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: low_stock_only
+          in: query
+          required: false
+          description: Hanya tampilkan bahan dengan stok rendah
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Laporan inventori
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/InventoryReport"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+  # ============================================================
+  # ROLES & PERMISSIONS
+  # ============================================================
+  /api/roles:
+    get:
+      tags: [ Roles & Permissions ]
+      summary: Daftar semua role
+      description: |
+        Menampilkan daftar role beserta permissions yang dimiliki dan jumlah user.
+
+        **Permission:** `manage-roles` (Owner only)
+      operationId: listRoles
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: with_count
+          in: query
+          required: false
+          description: Sertakan users_count
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Daftar role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+    post:
+      tags: [ Roles & Permissions ]
+      summary: Buat role baru
+      description: |
+        Membuat role custom baru dan assign permissions.
+        Role bawaan (owner, manager, cashier) tidak boleh diduplikasi.
+
+        **Permission:** `manage-roles` (Owner only)
+      operationId: createRole
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreRoleRequest"
+      responses:
+        "201":
+          description: Role berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Role berhasil dibuat."
+                  data:
+                    $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "422":
+          $ref: "#/components/responses/422"
+
+  /api/roles/{id}:
+    get:
+      tags: [ Roles & Permissions ]
+      summary: Detail role dengan permissions
+      description: |
+        Menampilkan detail role beserta daftar permissions yang dimiliki.
+
+        **Permission:** `manage-roles` (Owner only)
+      operationId: getRole
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Role ID (integer)
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Detail role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+
+    put:
+      tags: [ Roles & Permissions ]
+      summary: Update role & permissions
+      description: |
+        Memperbarui nama role dan/atau sync permissions. Semua permissions yang dikirim
+        akan menggantikan permissions lama (sync strategy).
+
+        **Proteksi:** Role bawaan `owner` tidak boleh diubah namanya.
+
+        **Permission:** `manage-roles` (Owner only)
+      operationId: updateRole
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleRequest"
+      responses:
+        "200":
+          description: Role berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Role berhasil diperbarui."
+                  data:
+                    $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: Role bawaan tidak boleh diubah
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Role 'owner' adalah role bawaan dan tidak boleh diubah namanya."
+        "422":
+          $ref: "#/components/responses/422"
+
+    delete:
+      tags: [ Roles & Permissions ]
+      summary: Hapus role
+      description: |
+        Menghapus role custom. Gagal jika masih ada user yang menggunakan role ini.
+        Role bawaan (owner, manager, cashier) tidak boleh dihapus.
+
+        **Permission:** `manage-roles` (Owner only)
+      operationId: deleteRole
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Role berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Role berhasil dihapus."
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: Role masih digunakan atau merupakan role bawaan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "Role tidak bisa dihapus karena masih digunakan oleh 2 pengguna."
+
+  /api/permissions:
+    get:
+      tags: [ Roles & Permissions ]
+      summary: Daftar semua permission
+      description: |
+        Menampilkan daftar seluruh permission yang tersedia di sistem.
+        Digunakan saat membuat/edit role untuk memilih permissions.
+
+        **Permission:** `manage-roles` (Owner only)
+      operationId: listPermissions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: group_by
+          in: query
+          required: false
+          description: Kelompokkan permissions berdasarkan module (e.g. "products",
+            "transactions")
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Daftar permission
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Permission"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+  # ============================================================
+  # AUDIT LOGS
+  # ============================================================
+  /api/audit-logs:
+    get:
+      tags: [ Audit Logs ]
+      summary: Daftar audit log
+      description: |
+        Menampilkan rekam jejak aktivitas krusial pengguna: void transaksi, perubahan harga,
+        penghapusan data, login/logout, dan perubahan role.
+
+        **Owner:** Melihat semua outlet atau filter per outlet.
+        **Manager:** Hanya log di outletnya sendiri.
+
+        **Permission:** `view-outlet-reports` atau `view-global-reports`
+      operationId: listAuditLogs
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryPerPage"
+        - $ref: "#/components/parameters/QueryDateFrom"
+        - $ref: "#/components/parameters/QueryDateTo"
+        - name: user_id
+          in: query
+          required: false
+          description: Filter berdasarkan user yang melakukan aksi
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          required: false
+          description: Filter berdasarkan jenis aksi
+          schema:
+            type: string
+            enum: [ created, updated, deleted, voided, login, logout ]
+        - name: auditable_type
+          in: query
+          required: false
+          description: Filter berdasarkan tipe entity (e.g. "Transaction", "Product",
+            "User")
+          schema:
+            type: string
+        - name: outlet_id
+          in: query
+          required: false
+          description: Filter per outlet (Owner only)
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/QuerySortDir"
+      responses:
+        "200":
+          description: Daftar audit log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLog"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  links:
+                    $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+
+  /api/audit-logs/{id}:
+    get:
+      tags: [ Audit Logs ]
+      summary: Detail audit log
+      description: |
+        Menampilkan detail lengkap satu entri audit log, termasuk old_values dan new_values.
+
+        **Permission:** `view-outlet-reports` atau `view-global-reports`
+      operationId: getAuditLog
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Detail audit log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/AuditLog"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
