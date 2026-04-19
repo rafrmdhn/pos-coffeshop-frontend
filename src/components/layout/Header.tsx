@@ -43,8 +43,6 @@ export default function Header() {
     }
   };
 
-  const currentOutletName = outletsData?.data.find(o => o.id === selectedOutletId)?.name || user?.outlet?.name || 'Loading...';
-
   return (
     <header className="h-16 flex items-center justify-between px-6 border-b bg-card">
       <div className="flex items-center gap-4">

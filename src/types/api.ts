@@ -70,6 +70,7 @@ export interface User {
   email: string;
   phone?: string | null;
   avatar_url?: string | null;
+  pin?: string | null;
   is_active: boolean;
   roles: string[];
   created_at: string;
