@@ -1,16 +1,40 @@
-import { Link } from 'react-router-dom';
-import { Coffee, LayoutDashboard, Settings, ShoppingBag, Tags, Boxes, Clock, ReceiptText, Ticket, Banknote, Building2, Users, ShieldCheck, ScrollText, LineChart, PackageSearch } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Coffee, LayoutDashboard, Settings, ShoppingBag, Tags, Boxes, Clock, ReceiptText, Ticket, Banknote, Building2, Users, ShieldCheck, ScrollText, LineChart, PackageSearch, X } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
+import { useUiStore } from '@/stores/uiStore';
 
 export default function Sidebar() {
   const { user } = useAuthStore();
+  const { sidebarOpen, setSidebarOpen } = useUiStore();
+  const location = useLocation();
+
+  // Auto-close sidebar on mobile when navigating
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname, setSidebarOpen]);
 
   return (
-    <aside className="w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border hidden md:flex flex-col min-h-screen relative shadow-sm">
-      <div className="h-16 flex items-center px-6 border-b border-sidebar-border font-bold text-lg text-primary">
-        Kopi Nusantara
-      </div>
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+    <>
+      {/* Mobile Overlay */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      
+      <aside className={`
+        fixed md:static inset-y-0 left-0 z-50 w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col min-h-screen shadow-2xl md:shadow-sm transition-transform duration-300 ease-in-out
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
+        <div className="h-16 flex items-center justify-between px-6 border-b border-sidebar-border font-bold text-lg text-primary">
+          Kopi Nusantara
+          <button className="md:hidden text-foreground hover:bg-muted p-1 rounded-md" onClick={() => setSidebarOpen(false)}>
+            <X size={20} />
+          </button>
+        </div>
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         <Link to="/pos" className="flex flex-row items-center gap-3 p-3 text-sm font-medium rounded-xl hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-foreground transition-colors">
           <Coffee size={20} className="text-primary/70" />
           POS Terminal
@@ -111,5 +135,6 @@ export default function Sidebar() {
         </div>
       )}
     </aside>
+    </>
   );
 }

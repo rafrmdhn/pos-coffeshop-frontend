@@ -10,7 +10,7 @@ import { setActiveOutletContext } from '@/services/auth';
 
 export default function Header() {
   const queryClient = useQueryClient();
-  const { theme, setTheme } = useUiStore();
+  const { theme, setTheme, sidebarOpen, setSidebarOpen } = useUiStore();
   const { logout, user, hasRole, selectedOutletId, setOutletId } = useAuthStore();
 
   const { data: outletsData } = useQuery({
@@ -43,10 +43,15 @@ export default function Header() {
     }
   };
 
+  const currentOutletName = outletsData?.data.find(o => o.id === selectedOutletId)?.name || user?.outlet?.name || 'Loading...';
+
   return (
     <header className="h-16 flex items-center justify-between px-6 border-b bg-card">
       <div className="flex items-center gap-4">
-        <button className="md:hidden text-foreground">
+        <button 
+          className="md:hidden text-foreground"
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+        >
           <Menu size={24} />
         </button>
         

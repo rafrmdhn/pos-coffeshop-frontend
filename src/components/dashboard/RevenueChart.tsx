@@ -12,7 +12,7 @@ const chartConfig = {
 
 export function RevenueChart({ data }: { data: any[] }) {
   return (
-    <Card className="col-span-full lg:col-span-8 bg-card/60 backdrop-blur-md border-border/40 overflow-hidden flex flex-col transition-all duration-300 hover:shadow-md">
+    <Card className="col-span-full lg:col-span-4 bg-card/60 backdrop-blur-md border-border/40 overflow-hidden flex flex-col transition-all duration-300 hover:shadow-md">
       <CardHeader className="pb-4">
         <CardTitle className="font-serif text-2xl tracking-tighter">Daily Revenue Target</CardTitle>
         <CardDescription className="opacity-80 text-sm tracking-wide">Gross income performance over the last 7 days.</CardDescription>
