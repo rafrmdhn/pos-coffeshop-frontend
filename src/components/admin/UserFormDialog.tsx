@@ -31,7 +31,7 @@ const schema = z.object({
   phone: z.string().optional(),
   role: z.string().min(1, 'Role is required'),
   outlet_id: z.string().min(1, 'Outlet is required'),
-  pin: z.string().min(4, 'PIN must be at least 4 digits').max(6, 'PIN cannot exceed 6 digits'),
+  pin: z.string().min(4, 'PIN must be at least 4 digits').max(6, 'PIN cannot exceed 6 digits').optional(),
   is_active: z.boolean().default(true),
   password: z.string().optional(),
   password_confirmation: z.string().optional(),
