@@ -11,7 +11,7 @@ const chartConfig = {
 
 export function PaymentChart({ data }: { data: any[] }) {
   return (
-    <Card className="col-span-full md:col-span-1 lg:col-span-4 bg-card/60 backdrop-blur-md border-border/40 flex flex-col justify-between transition-all duration-300 hover:shadow-md">
+    <Card className="col-span-full md:col-span-1 lg:col-span-2 bg-card/60 backdrop-blur-md border-border/40 flex flex-col justify-between transition-all duration-300 hover:shadow-md">
       <CardHeader>
         <CardTitle className="font-serif text-xl border-b border-border/40 pb-4">Payment Methods</CardTitle>
       </CardHeader>

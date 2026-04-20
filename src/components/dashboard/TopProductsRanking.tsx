@@ -7,7 +7,7 @@ export function TopProductsRanking({ data }: { data: any[] }) {
   const maxQty = Math.max(...data.map(d => d.qty));
 
   return (
-    <Card className="col-span-full md:col-span-1 lg:col-span-4 flex flex-col bg-card/60 backdrop-blur-md border-border/40 transition-all duration-300 hover:shadow-md">
+    <Card className="col-span-full md:col-span-1 lg:col-span-2 flex flex-col bg-card/60 backdrop-blur-md border-border/40 transition-all duration-300 hover:shadow-md">
       <CardHeader>
         <CardTitle className="font-serif text-xl border-b border-border/40 pb-4">Best Sellers</CardTitle>
       </CardHeader>
