@@ -4,12 +4,13 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useState } from 'react';
 import { PaymentDialog } from './PaymentDialog';
+import { formatCurrency } from '@/lib/utils';
 
 export function OrderPanel() {
   const { items, orderType, subtotal, tax, grandTotal, setOrderType, updateQty, removeItem, clearCart } = useCartStore();
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
 
-  const formatIDR = (val: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+
 
   return (
     <div className="h-full w-full bg-card flex flex-col border-l border-border/50 backdrop-blur-md">
@@ -46,7 +47,7 @@ export function OrderPanel() {
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <h4 className="font-sans font-bold text-foreground leading-tight text-sm md:text-base">{item.name}</h4>
-                    <p className="text-primary font-bold text-sm tracking-tight mt-1">{formatIDR(item.price)}</p>
+                    <p className="text-primary font-bold text-sm tracking-tight mt-1">{formatCurrency(item.price, 0)}</p>
                   </div>
                   <button onClick={() => removeItem(item.id)} className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors active:scale-90">
                     <Trash2 size={16} />
@@ -55,7 +56,7 @@ export function OrderPanel() {
                 
                 {/* Stepper Controls */}
                 <div className="flex justify-between items-center mt-2 border-t border-border/40 pt-3">
-                  <span className="text-sm font-bold tracking-tight text-foreground/80">{formatIDR(item.price * item.qty)}</span>
+                  <span className="text-sm font-bold tracking-tight text-foreground/80">{formatCurrency(item.price * item.qty, 0)}</span>
                   <div className="flex items-center gap-3 bg-muted/30 rounded-full px-1.5 py-1.5 border border-border/40">
                     <button onClick={() => updateQty(item.id, item.qty - 1)} className="w-7 h-7 rounded-full bg-background flex items-center justify-center hover:bg-muted active:scale-90 transition-transform shadow-sm text-foreground">
                       <Minus size={14} strokeWidth={2.5}/>
@@ -77,7 +78,7 @@ export function OrderPanel() {
         <div className="space-y-2 mb-6 px-2">
           <div className="flex justify-between text-sm text-muted-foreground font-semibold">
             <span>Subtotal</span>
-            <span>{formatIDR(subtotal)}</span>
+            <span>{formatCurrency(subtotal, 0)}</span>
           </div>
           <div className="flex justify-between text-sm text-muted-foreground font-semibold">
             <span>Diskon</span>
@@ -85,11 +86,11 @@ export function OrderPanel() {
           </div>
           <div className="flex justify-between text-sm text-muted-foreground font-semibold">
             <span>Pajak (PB1 10%)</span>
-            <span>{formatIDR(tax)}</span>
+            <span>{formatCurrency(tax, 0)}</span>
           </div>
           <div className="border-t-2 border-dashed border-border/60 my-3 pt-3 flex justify-between items-end">
             <span className="font-serif font-semibold text-xl tracking-tight">Total Akhir</span>
-            <span className="font-sans font-bold text-3xl md:text-4xl tracking-tighter text-primary">{formatIDR(grandTotal)}</span>
+            <span className="font-sans font-bold text-3xl md:text-4xl tracking-tighter text-primary">{formatCurrency(grandTotal, 0)}</span>
           </div>
         </div>
 

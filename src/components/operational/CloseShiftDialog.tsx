@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Banknote, Coins, Calculator } from 'lucide-react'
+import { formatCurrency } from '@/lib/utils'
 
 interface CloseShiftDialogProps {
   open: boolean
@@ -48,7 +49,7 @@ export function CloseShiftDialog({ open, onOpenChange, onSubmit }: CloseShiftDia
     }
   }
 
-  const formatCurrency = (val: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(val)
+
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

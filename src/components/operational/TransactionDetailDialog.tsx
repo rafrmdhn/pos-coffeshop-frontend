@@ -4,6 +4,15 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { type Transaction } from '@/types/api'
+import { formatCurrency } from '@/lib/utils'
+
+type TransactionItemWithPriceFallback = NonNullable<Transaction['items']>[number] & {
+  product_price?: number | string | null
+  unit_price?: number | string | null
+  product?: {
+    price?: number | string | null
+  } | null
+}
 
 interface TransactionDetailDialogProps {
   open: boolean
@@ -26,8 +35,20 @@ export function TransactionDetailDialog({ open, onOpenChange, transaction, onVoi
 
   if (!transaction) return null
 
-  const formatCurrency = (val: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(val)
   const formatDate = (dateStr?: string | null) => dateStr ? new Date(dateStr).toLocaleString("id-ID") : "-"
+  const getItemUnitPrice = (item: TransactionItemWithPriceFallback) => {
+    const prices = [item.unit_price, item.product_price, item.product?.price]
+      .map(price => Number(price))
+
+    return prices.find(price => Number.isFinite(price) && price > 0) ?? 0
+  }
+
+  const getItemSubtotal = (item: TransactionItemWithPriceFallback) => {
+    const subtotal = Number(item.subtotal)
+    if (Number.isFinite(subtotal) && subtotal > 0) return subtotal
+
+    return Number(item.quantity || 0) * getItemUnitPrice(item)
+  }
 
   const handleVoid = async () => {
     if (voidNotes.length < 5) return alert("Please provide a valid reason (min 5 characters).")
@@ -60,15 +81,20 @@ export function TransactionDetailDialog({ open, onOpenChange, transaction, onVoi
           <div className="bg-muted/20 p-4 rounded-xl border border-border/40">
             <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">Items</h3>
             <div className="space-y-3">
-              {transaction.items?.map(item => (
-                <div key={item.id} className="flex justify-between items-center text-sm">
-                  <div>
-                    <div className="font-medium text-foreground">{item.product_name}</div>
-                    <div className="text-muted-foreground text-xs">{item.quantity} x {formatCurrency(item.unit_price)}</div>
+              {transaction.items?.map(item => {
+                const unitPrice = getItemUnitPrice(item)
+                const subtotal = getItemSubtotal(item)
+
+                return (
+                  <div key={item.id} className="flex justify-between items-center text-sm">
+                    <div>
+                      <div className="font-medium text-foreground">{item.product_name}</div>
+                      <div className="text-muted-foreground text-xs">{item.quantity} x {formatCurrency(unitPrice)}</div>
+                    </div>
+                    <div className="font-semibold text-foreground">{formatCurrency(subtotal)}</div>
                   </div>
-                  <div className="font-semibold text-foreground">{formatCurrency(item.subtotal)}</div>
-                </div>
-              ))}
+                )
+              })}
             </div>
             
             <div className="mt-4 pt-4 border-t border-border/40 space-y-2 text-sm">

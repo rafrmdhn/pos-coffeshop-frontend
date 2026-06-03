@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Coffee } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { productService } from '@/services/productAndCategoryService';
+import { formatCurrency } from '@/lib/utils';
 
 export function ProductGrid() {
   const { activeCategory, addItem } = useCartStore();
@@ -17,7 +18,7 @@ export function ProductGrid() {
   });
 
   const products = response?.data || [];
-  const formatIDR = (val: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+
 
   if (isLoading) {
     return (
@@ -80,7 +81,7 @@ export function ProductGrid() {
                 </h3>
                 <div className="flex items-center justify-between mt-auto pt-2">
                   <span className="font-sans font-bold text-base md:text-lg text-primary tracking-tight">
-                    {formatIDR(product.price)}
+                    {formatCurrency(product.price, 0)}
                   </span>
                   <div className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300">
                     <Plus size={16} strokeWidth={2.5} />

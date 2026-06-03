@@ -5,13 +5,12 @@ import { Banknote, QrCode, CheckCircle2, Loader2, AlertCircle } from "lucide-rea
 import { toast } from 'sonner'
 import { transactionService } from "@/services/operationalService"
 import { db } from "@/lib/db"
+import { formatCurrency } from "@/lib/utils"
 
 export function PaymentDialog({ open, onOpenChange }: { open: boolean, onOpenChange: (open: boolean) => void }) {
   const { items, orderType, grandTotal, clearCart } = useCartStore()
   const [method, setMethod] = useState<'cash'|'qris'>('cash')
   const [isProcessing, setIsProcessing] = useState(false)
-
-  const formatIDR = (val: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
 
   const handleProcess = async () => {
     setIsProcessing(true);
@@ -75,7 +74,7 @@ export function PaymentDialog({ open, onOpenChange }: { open: boolean, onOpenCha
           <DialogTitle className="font-serif text-3xl tracking-tight text-center">Proses Checkout</DialogTitle>
           <div className="text-center mt-4">
              <p className="text-muted-foreground text-sm font-semibold tracking-widest uppercase mb-1">Total Tagihan</p>
-             <h2 className="text-5xl font-sans font-bold tracking-tighter text-primary border-b-4 border-primary/20 inline-block pb-2">{formatIDR(grandTotal)}</h2>
+             <h2 className="text-5xl font-sans font-bold tracking-tighter text-primary border-b-4 border-primary/20 inline-block pb-2">{formatCurrency(grandTotal, 0)}</h2>
           </div>
         </DialogHeader>
         
